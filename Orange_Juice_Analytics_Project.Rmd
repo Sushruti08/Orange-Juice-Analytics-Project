@@ -1,212 +1,127 @@
----
-title: "Orange Juice Analytics Project"
-output: html_notebook
----
-
-```{r}
-library(caret)
-library(e1071)
-library(kernlab)
+##Package loading
 library(dplyr)
-library(arm)
+library(mlbench)
+library(caret)
+library(ROCR)
+library(e1071)
+library(dataPreparation)
+library(ROCR)
+library(ggplot2)
+library(plotROC)
 library(pROC)
-library(grid)
-library(gridExtra)
-```
-
-```{r}
-#Download data
-OJ<-read.csv(url("http://data.mishra.us/files/OJ.csv"))
-```
-
-```{r}
-#Identify Correllated items
-correlationMatrix <- cor(OJ[,c(2,3,4,5,6,7,8,9,10,11,12,13,15,16,17,18)])
-highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.75)
+data<-read.csv(url("http://data.mishra.us/files/OJ.csv"))
+summary(data)
+str(data)
+##No Contants
+constant_cols <- whichAreConstant(data)
+constant_cols
+##No Double Columns
+double_cols <- whichAreInDouble(data)
+double_cols
+##1 Bijection Column - ID 18 [Delete the column]
+bijections_cols <- whichAreBijection(data)
+bijections_cols
+#Deleting column STORE
+data <- subset( data, select = -STORE )
+str(data)
+#Correlation between dependent variables
+correlationMatrix <- cor(data[,c(2,3,4,5,6,7,8,9,10,11,12,13,15,16,17)])
+#Summarize the correlation matrix
+print(correlationMatrix)
+#Attributes that are highly corrected (>0.7)
+highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.7,names = T)
+#printing highly correlated attributes
 print(highlyCorrelated)
-#12,10,5,6
-
-```
-
-```{r}
-#Transform into Binary and Factors
-OJ$Purchase <-as.factor(OJ$Purchase)
-f=c(1,2,3,8,9,14,18)
-for(i in f) OJ[,i]=as.factor(OJ[,i])
-set.seed(123)
-rows<-sample(nrow(OJ), .8*nrow(OJ))
-OJ_train<- OJ[rows,]
-OJ_test<-OJ[-rows,]
-#Override train data with
-#6 and 12 dropped from correlation matrix output
-#2,3,7,8,9,11,13,14,17,18- dropped due to lack of impact/collinearity discovered through running models
-
-```
-
-```{r}
-#included variables
-OJ_train<- OJ_train[,c(1,4,5,10,15,16)]
-OJ_test<- OJ_test[,c(1,4,5,10,15,16)]
-```
-
-```{r}
-#Make Logged Model
-summary(logged_model<-train(Purchase~.,
-      data=OJ_train,
-      method="glm",
-      #preProcess=c("center","scale"),
-      family="binomial"))
-coefficients<-coef(logged_model$finalModel)
-#OJ_test$YN<-as.factor(if_else(OJ_test$Purchase==OJ_test$logpredict2,"Y","N"))
-#OJ_test$predicted<-OJ_test$logpredict[1]
-#OJ_test$predicted2<-OJ_test$logpredict[2]
-#ggplot(OJ_test, aes(predicted, Purchase, col=YN))+
-#  geom_point()+
-#  stat_smooth(method="glm",              
-#              formula=OJ_test$Purchase~ OJ_test$predicted,
-#              family="binomial",
-#                col="red")
-```
-
-```{r}
-#Use this to play with coefficients
-invlogit(coefficients[1]+coefficients[2]*.3+coefficients[3]*-.3+coefficients[4]*1+
-           coefficients[5]*0+coefficients[6]*0)
-```
-
-```{r}
-###############################################################################################
-#Positive Coefficients are coefficients that increase probability of MM being purchased
-  #PriceCH-As competitor price increases MM is more likely to be purchased
-  #PctDiscMM- As discount goes up MM is more likely to be purchased
-table(OJ$Purchase)
-
-#Negative Coefficients are coefficients that decrease probability of MM being purchased
-  #PriceMM-As MM price increases MM is less likely to be purchased
-  #LoyalCH- As discount goes up MM is less likely to be purchased
-  #PctDiscCH-As competitor discount increases MM is less likely to be purchased
-
-###############################################################################################
-```
-```{r}
-#In terms of probability
-options(scipen=999)
-invlogit(coef(logged_model$finalModel))
-exp(coef(logged_model$finalModel))
-
-```
-```{r}
-#Probability Confusion Matrix
-#confusionMatrix(logged_model)
-
-```
-
-```{r}
-#Run model against test data
-logpredict <- predict(logged_model, newdata = OJ_test, probability=T, type="raw")
-confusionMatrix(data = logpredict, OJ_test$Purchase)
-roc(OJ_test$Purchase, predict(logged_model, newdata=OJ_test, type="prob" )[,2],plot=T, auc=T)
-#.8364 accuracy-Logistic Model
-#.9042 AUC- Logistic Model
-
-```
-
-```{r}
-#SVM approach
-
-#Setup
-fitControl<- trainControl(
-    method="repeatedcv",
-    number=5,
-    repeats=5,
-    summaryFunction=twoClassSummary,
-    classProbs = TRUE
+#Removing higly correlated variabes
+data <- subset( data, select = -c(2,6,11,12,13,15))
+str(data)
+#Checking for MM [1=M,0=CH]
+data$Purchase <- ifelse(data$Purchase == "MM", 1, 0)
+data$Purchase <- factor(data$Purchase, levels = c(0, 1))
+str(data)
+#Creating Train & Test Data Sets
+set.seed(100)
+trainDataIndex <- createDataPartition(data$Purchase, p=0.7, list = F) # 70% training data
+trainData <- data[trainDataIndex, ]
+testData <- data[-trainDataIndex, ]
+str(trainData)
+scales <- build_scales(dataSet = trainData, cols = c("PriceCH", "PriceMM", "DiscMM", "LoyalCH", "PctDiscCH", "ListPriceDiff" ), verbose = TRUE)
+trainData <- fastScale(dataSet = trainData, scales = scales, verbose = TRUE)
+testData <- fastScale(dataSet = testData, scales = scales, verbose = TRUE)
+str(trainData)
+#Cross Vaidation
+fitControl <- trainControl(## 10-fold CV
+method = "repeatedcv",
+number = 2,
+## repeated ten times
+repeats = 3,
+summaryFunction=twoClassSummary,
+classProbs = TRUE)
+logitmod <- glm(Purchase ~ ., family = "binomial", data=trainData)
+summary(logitmod)
+#Removing Variabes with high P-Values (>0.05)
+trainData <- subset( trainData, select = -c(2,6,7,9,11))
+testData <- subset( testData, select = -c(2,6,7,9,11))
+str(trainData)
+levels(trainData$Purchase) <- make.names(levels(factor(trainData$Purchase)))
+levels(testData$Purchase) <- make.names(levels(factor(testData$Purchase)))
+str(trainData)
+str(testData)
+logitmod_1 <- glm(Purchase ~ ., family = "binomial", data=trainData)
+summary(logitmod_1)
+##### Logistic
+logFit <- train(Purchase ~ ., data=trainData, method="glm", family="binomial",trControl = fitControl,metric = "ROC")
+logFit
+logPred <- predict(logFit, newdata = testData)
+#Confusion Matrix on Test Data
+confusionMatrix(data = logPred, testData$Purchase)
+#Plotting ROC curve for logit model
+roc(testData$Purchase, predict(logFit, newdata=testData, type="prob" )[,2],plot=T,
+auc=T)
+grid_radial <- expand.grid(sigma = c(.01,.02),
+C = c(.75,1,1.5))
+###### SVM - Radial
+svmFit1 <- train(Purchase ~ ., data = trainData,
+method='svmRadial',
+trControl = fitControl,
+#preProc = c("center","scale"),
+metric = "ROC",
+verbose = FALSE,
+probability = TRUE,
+tuneGrid = grid_radial
 )
-
-```
-
-```{r}
-#Grid for tuning parameters
-grid <- expand.grid(#sigma=c(.75,1),
-  #Weight=c(1,2),
-  #tau=c(1,2)
-  #lambda=c(1,2),
-  #qval=c(1),
-  #degree=c(1,6,4),
-  #scale=c(1.1,1.2)
-  C=c(.1,.09)
-  #sparsity=c(.1,.5,1,2)
-  #cost=seq(.01,.15,.01)
-  #nleaves=c(1,5,10),
-  #ntrees=c(1,5,10),
-  #K.prov=c(1,2,3,4)
+svmFit1
+svmPred1 <- predict(svmFit1, newdata = testData)
+#Confusion Matrix on Test Data
+confusionMatrix(data = svmPred1, testData$Purchase)
+#Plotting ROC curve for SVM - Radial model
+roc(testData$Purchase, predict(svmFit1, newdata=testData, type="prob" )[,2],plot = T, auc = T)
+#Finding best value of Cost for linear kernel
+grid_linear <- expand.grid(C = c(.75,1,1.5))
+svmFit_linear <- train(Purchase ~ ., data = trainData,
+method='svmLinear',
+trControl = fitControl,
+#preProc = c("center","scale"),
+metric = "ROC",
+verbose = FALSE,
+probability = TRUE,
+tuneGrid = grid_linear
 )
-
-```
-
-```{r}
-#Assigning the models
-svmfit <- train(Purchase~.,
-                data=OJ_train,
-                method="svmLinear",
-                trControl=fitControl,
-                preProcess=c("center","scale"),
-                metric="ROC",
-                verbose=F,
-                probability=T,
-                tuneGrid=grid
-                )
-
-```
-
-```{r}
-#Check out the model and what tuning parameters were chosen
-svmfit
-
-```
-
-```{r}
-#Make with predicted OJ output and then Confusion matrix on performance
-svmPred <- predict(svmfit, newdata=OJ_test, probability=T)
-svmPred2 <- as.data.frame(round(predict(svmfit, newdata=OJ_test, probability=T, type="prob"),4))
-colnames(svmPred2)<-c("CH","MM")
-grid.table(head(svmPred2,10))
-confusionMatrix(svmPred, OJ_test$Purchase)
-roc(OJ_test$Purchase, predict(svmfit, newdata=OJ_test, type="prob" )[,2])
-#Best Model acheived:
-  #svmLinear 
-  #.8458-.1
-#OR
-  #svmPoly--.8458 degree=  1, scale=1, cost=.1
-
-```
-
-```{r}
-#Write up coefficient interpretation
-#Finish slide/graph
-#ROC graphs 
-par(mfrow=c(1,2))
-roc(OJ_test$Purchase, predict(svmfit, newdata=OJ_test, type="prob" )[,2],plot=T,
-    plot.roc(col="red"),auc=T)
-roc(OJ_test$Purchase, predict(logged_model, newdata=OJ_test, type="prob" )[,2],plot=T,auc=T)
-par(mfrow=c(1,1))
-#plot(h)
-
-```
-
-```{r}
-rocsvm<- roc(OJ_test$Purchase, predict(svmfit, newdata=OJ_test, type="prob" )[,2])
-roclog<- roc(OJ_test$Purchase, predict(logged_model, newdata=OJ_test, type="prob" )[,2])
-plot(rocsvm)
-plot.roc(rocsvm)
-plot.roc(smooth(roclog), print.auc=T, col="red", main="Logistic")
-plot.roc(smooth(rocsvm), print.auc=T, col="blue",main="SVM")
-
-```
-
-```{r}
-plot.roc(roclog, print.auc=T, col="red", main="Logistic")
-plot.roc(rocsvm, print.auc=T, col="blue",main="SVM")
-
-```
-
+svmFit_linear
+svmPred_linear <- predict(svmFit_linear, newdata = testData)
+#Confusion Matrix on Test Data
+confusionMatrix(data = svmPred_linear, testData$Purchase)
+#Plotting ROC curve for SVM model
+roc(testData$Purchase, predict(svmFit_linear, newdata=testData, type="prob" )[,2],plot = T, auc = T)
+#####SVM - Polynomial
+svm_p <- tune.svm(Purchase ~ ., data = trainData,
+degree = (3:6),
+gamma = (0.1:0.4),
+coef0 = 1,
+kernel = "polynomial")
+svm_p
+svm_poly <- svm(Purchase ~ ., data=trainData, type='C-classification', kernel='polynomial', degree=3, gamma=0.1, coef0=1, scale=FALSE, probability = TRUE)
+summary(svm_poly)
+svmPred_poly <- predict(svm_poly, newdata = testData)
+#Confusion Matrix on Test Data
+confusionMatrix(data = svmPred_poly, testData$Purchase
